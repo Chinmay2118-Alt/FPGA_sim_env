@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GOL :: Tactical Analyst Terminal</title>
+    <style>
+        :root {
+            --neon-green: #0fa;
+            --dark-bg: #050505;
+            --panel-bg: #0a0f0a;
+            --scanline: rgba(0, 255, 170, 0.03);
+        }
+
+        body {
+            background-color: var(--dark-bg);
+            color: var(--neon-green);
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-image: linear-gradient(var(--scanline) 1px, transparent 1px);
+            background-size: 100% 3px;
+        }
+
+        h1 {
+            text-transform: uppercase;
+            letter-spacing: 4px;
+            text-shadow: 0 0 10px var(--neon-green);
+            border-bottom: 2px solid var(--neon-green);
+            padding-bottom: 10px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            width: 90%;
+            max-width: 1200px;
+            margin-top: 20px;
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--neon-green);
+            box-shadow: 0 0 15px rgba(0, 255, 170, 0.2);
+            padding: 20px;
+            flex: 1;
+        }
+
+        /* The 16x16 Grid representation */
+        .grid-display {
+            display: grid;
+            grid-template-columns: repeat(16, 20px);
+            gap: 2px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        .cell {
+            width: 20px;
+            height: 20px;
+            border: 1px solid rgba(0, 255, 170, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .cell.player-a { background-color: rgba(0, 255, 170, 0.8); color: black; }
+        .cell.player-b { background-color: #ff0055; color: white; border-color: #ff0055; }
+
+        button {
+            background: transparent;
+            color: var(--neon-green);
+            border: 1px solid var(--neon-green);
+            padding: 10px 20px;
+            font-family: inherit;
+            font-size: 16px;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.3s ease;
+            display: block;
+            margin: 20px auto 0;
+        }
+
+        button:hover {
+            background: var(--neon-green);
+            color: black;
+            box-shadow: 0 0 20px var(--neon-green);
+        }
+
+        .ai-feedback {
+            height: 250px;
+            overflow-y: auto;
+            border: 1px dashed var(--neon-green);
+            padding: 10px;
+            margin-top: 20px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .blinking-cursor::after {
+            content: '_';
+            animation: blink 1s step-end infinite;
+        }
+
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Tactical Analyst :: FPGA Subsystem</h1>
+
+    <div class="container">
+        <div class="panel">
+            <h2 style="margin-top: 0;">> BOARD_STATE</h2>
+            <div class="grid-display" id="grid">
+                <script>
+                    for(let i=0; i<256; i++) {
+                        document.write('<div class="cell">0</div>');
+                    }
+                </script>
+            </div>
+            
+            <div style="display: flex; gap: 10px;">
+                <button onclick="toggleLiveFPGA()">[ LIVE HW FEED ]</button>
+                <button onclick="fastForwardFPGA()" style="color: #fff; border-color: #fff;">[ HW FAST FORWARD ]</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2 style="margin-top: 0;">> UPLINK :: LLM_GENERAL</h2>
+            <button onclick="scanBoard()">[ SCAN BOARD ]</button>
+            <div class="ai-feedback">
+                <span style="color: #aaa;">Awaiting uplink...</span><br><br>
+                <span class="blinking-cursor">SYS_READY </span>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const gridDiv = document.getElementById('grid');
+        let animationTimer = null;
+
+        // Render the board and make it CLICKABLE
+        function drawGrid(gridData) {
+            gridDiv.innerHTML = '';
+            for (let r = 0; r < 16; r++) {
+                for (let c = 0; c < 16; c++) {
+                    let val = gridData[r][c];
+                    let cssClass = val === 1 ? 'player-a' : (val === 2 ? 'player-b' : '');
+                    
+                    // Notice the onclick handler we just added!
+                    gridDiv.innerHTML += `<div class="cell ${cssClass}" onclick="toggleCell(${r}, ${c}, this)">${val > 0 ? val : ''}</div>`;
+                }
+            }
+        }
+
+        // The function that runs when you click a cell
+        function toggleCell(r, c, element) {
+            // Don't allow clicking if the simulation is currently running!
+            if (animationTimer) return; 
+
+            // Ping the Python server to update the backend matrix
+            fetch(`/update_cell/${r}/${c}`)
+                .then(response => response.json())
+                .then(data => {
+                    // Update the visual UI instantly
+                    element.className = 'cell';
+                    element.innerHTML = '';
+                    if (data.new_val === 1) {
+                        element.classList.add('player-a');
+                        element.innerHTML = '1';
+                    } else if (data.new_val === 2) {
+                        element.classList.add('player-b');
+                        element.innerHTML = '2';
+                    }
+                });
+        }
+
+        // Draw initial state on page load
+        drawGrid({{ initial_grid | tojson }});
+        
+        // Ensure the FPGA is loaded with the initial board state
+        fetch('/load_fpga');
+
+        function toggleLiveFPGA() {
+            const feedbackDiv = document.querySelector('.ai-feedback');
+            
+            if (animationTimer) {
+                // If running, Stop it
+                clearInterval(animationTimer);
+                animationTimer = null;
+                feedbackDiv.innerHTML = '<span style="color: #fff;">LIVE HARDWARE FEED PAUSED.</span><br><br><span class="blinking-cursor">SYS_READY </span>';
+                return;
+            }
+
+            // Start the 1 FPS Loop fetching from the FPGA
+            feedbackDiv.innerHTML = '<span style="color: #0fa;">SYNCING WITH SILICON... LIVE FEED ACTIVE.</span>';
+            animationTimer = setInterval(() => {
+                fetch('/step_fpga')
+                    .then(response => response.json())
+                    .then(data => {
+                        drawGrid(data.grid);
+                        
+                        // Extinction check
+                        if (data.pop_A === 0 || data.pop_B === 0) {
+                            clearInterval(animationTimer);
+                            animationTimer = null;
+                            let winner = data.pop_A > 0 ? "PLAYER A WINS" : (data.pop_B > 0 ? "PLAYER B WINS" : "MUTUAL EXTINCTION");
+                            feedbackDiv.innerHTML = `<span style="color: #ff0055;">SIMULATION HALTED. ${winner}.</span><br><br><span class="blinking-cursor">SYS_READY </span>`;
+                        }
+                    });
+            }, 1000); // 1000ms = 1 Frame Per Second
+        }
+
+        function fastForwardFPGA() {
+            if (animationTimer) {
+                clearInterval(animationTimer);
+                animationTimer = null;
+            }
+
+            const feedbackDiv = document.querySelector('.ai-feedback');
+            feedbackDiv.innerHTML = '<span style="color: #ff0055;">INITIATING 100-STEP HARDWARE FAST FORWARD...</span>';
+            
+            // To fast forward, we just rapidly ping the step function 100 times
+            let steps = 0;
+            let turboInterval = setInterval(() => {
+                fetch('/step_fpga')
+                    .then(response => response.json())
+                    .then(data => {
+                        drawGrid(data.grid);
+                        steps++;
+                        if(steps >= 100 || data.pop_A === 0 || data.pop_B === 0) {
+                            clearInterval(turboInterval);
+                            feedbackDiv.innerHTML = `<span style="color: #0fa;">FAST FORWARD COMPLETE. A: ${data.pop_A} | B: ${data.pop_B}</span><br><br><span class="blinking-cursor">SYS_READY </span>`;
+                        }
+                    });
+            }, 10); // Run as fast as the network allows (10ms)
+        }
+
+        function scanBoard() {
+            const feedbackDiv = document.querySelector('.ai-feedback');
+            feedbackDiv.innerHTML = '<span style="color: #0fa;">UPLINK IN PROGRESS... CALCULATING PROBABILITIES...</span>';
+            fetch('/scan_board')
+                .then(response => response.json())
+                .then(data => {
+                    feedbackDiv.innerHTML = `<span style="color: #fff;">> COMMANDER:</span> <br><br> ${data.feedback} <br><br><span class="blinking-cursor">SYS_READY </span>`;
+                });
+        }
+    </script>
+    
+</body>
+</html>
